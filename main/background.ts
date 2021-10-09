@@ -9,10 +9,6 @@ import "./helpers/ipc";
 const store = new Store();
 const isProd: boolean = process.env.NODE_ENV === "production";
 
-const connector = new LCUConnector();
-
-let credentials;
-
 if (isProd) {
   serve({ directory: "app" });
 } else {
@@ -35,7 +31,6 @@ app.on(
 );
 
 (async () => {
-  connector.start();
   await app.whenReady();
 
   const backgroundColor = (): string => {
@@ -75,6 +70,26 @@ app.on(
     mainWindow.maximizable ? mainWindow.maximize() : mainWindow.unmaximize();
   });
 
+  let credentials;
+  const connector = new LCUConnector();
+  connector.on("connect", ({ username, port, password, protocol, address }) => {
+    console.log("CONNECTED TO LCU");
+    credentials = { username, port, password, protocol, address };
+    mainWindow.webContents.send("credentialspass", credentials);
+  });
+  connector.on("disconnect", () => {
+    credentials = null;
+  });
+  connector.start();
+
+  ipc.on("fe-ready", (event, args) => {
+    console.log("FE READY");
+    if (credentials) {
+      console.log(`PASSING CREDENTIALS ${JSON.stringify(credentials)}`);
+      event.reply("credentialspass", credentials);
+    }
+  });
+
   if (isProd) {
     await mainWindow.loadURL("app://./home.html");
   } else {
@@ -86,23 +101,6 @@ app.on(
 
 app.on("window-all-closed", () => {
   app.quit();
-});
-
-connector.on("connect", ({ username, port, password, protocol, address }) => {
-  console.log("CONNECTED TO LCU");
-  credentials = { username, port, password, protocol, address };
-});
-
-connector.on("disconnect", () => {
-  credentials = null;
-});
-
-ipc.on("fe-ready", (event, args) => {
-  console.log("FE READY");
-  if (credentials) {
-    console.log(`PASSING CREDENTIALS ${JSON.stringify(credentials)}`);
-    event.reply("credentialspass", credentials);
-  }
 });
 
 ipc.on("process:close", () => {

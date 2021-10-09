@@ -4,6 +4,9 @@ import Swagger from "swagger-ui";
 import axios, { AxiosResponse } from "axios";
 
 import Titlebar from "@components/Titlebar";
+import SwaggerUI from "swagger-ui";
+
+type SwaggerUIUpdatable = SwaggerUI & { updateSpec: (specUpdates: object) => void };
 
 const BASIC_AUTH = "BasicAuth";
 
@@ -16,51 +19,47 @@ const Home = (): JSX.Element => {
     protocol: string;
   }>();
 
-  useEffect(() => {
-    ipcRenderer.send("fe-ready");
-
-    ipcRenderer.on("credentialspass", (event, data) => {
-      SetCredentials(data);
-    });
-  }, []);
-
-  const swaggerPromise = axios.get(
-    "https://www.mingweisamuel.com/lcu-schema/lcu/openapi.json"
-  );
-
-  useEffect(() => {
+  function loadCredentials(swagger: SwaggerUIUpdatable) {
     if (credentials == null) {
-      console.warn("Credentials are null.");
       return;
     }
-    swaggerPromise.then((res: AxiosResponse<any>) => {
-      const spec = res.data;
-
-      spec.servers = [
+    console.log('UPDATING CREDENTIALS', credentials);
+    swagger.updateSpec({
+      servers: [
         {
           url: `https://127.0.0.1:${credentials.port}`,
           description: "default",
-        },
-      ];
+        }
+      ],
+    });
+    swagger.preauthorizeBasic(
+      BASIC_AUTH,
+      credentials.username,
+      credentials.password
+    );
+  }
 
-      spec.components = {
-        securitySchemes: {
-          [BASIC_AUTH]: {
-            type: "http",
-            scheme: "basic",
-          },
-        },
-      };
-      spec.security = [
-        {
-          [BASIC_AUTH]: [],
-        },
-      ];
-
+  const swaggerPromise = new Promise<SwaggerUIUpdatable>((resolve, reject) => {
+    useEffect(() => {
       try {
         const swagger = Swagger({
           dom_id: "#swagger",
-          spec,
+          spec: {
+            openapi: "3.0.0",
+            security: [
+              {
+                [BASIC_AUTH]: [],
+              },
+            ],
+            components: {
+              securitySchemes: {
+                [BASIC_AUTH]: {
+                  type: "http",
+                  scheme: "basic",
+                },
+              },
+            },
+          },
           operationsSorter: "alpha",
           tagsSorter: "alpha",
           docExpansion: "none",
@@ -69,18 +68,46 @@ const Home = (): JSX.Element => {
           filter: "",
           deepLinking: false, // @ts-ignore
           "request.curlOptions": ["--insecure"], // TODO: doesn't seem to show up.
-        });
-        swagger.preauthorizeBasic(
-          BASIC_AUTH,
-          credentials.username,
-          credentials.password
-        );
-      } catch (e) {
-        console.log("not ready to swagify");
-        console.log(e);
+          plugins: [
+            (system) => ({
+              rootInjects: {
+                updateSpec: (specUpdates: object) => {
+                  const jsonSpec = system.getState().toJSON().spec.json;
+                  const newJsonSpec = Object.assign({}, jsonSpec, specUpdates);
+                  // Preserve securitySchemes.
+                  newJsonSpec.components.securitySchemes = jsonSpec.components.securitySchemes;
+                  return system.specActions.updateJsonSpec(newJsonSpec);
+                },
+              },
+            })
+          ]
+        }) as SwaggerUIUpdatable;
+        loadCredentials(swagger);
+        resolve(swagger);
       }
-    });
+      catch(e) {
+        reject(e);
+      }
+    }, []);
+  });
+
+  useEffect(() => {
+    swaggerPromise.then(loadCredentials);
   }, [credentials]);
+
+  useEffect(() => {
+    axios.get("https://www.mingweisamuel.com/lcu-schema/lcu/openapi.json")
+      .then((res: AxiosResponse<any>) => swaggerPromise
+        .then(swagger => swagger.updateSpec(res.data)))
+      .catch(console.error);
+
+    ipcRenderer.send("fe-ready");
+
+    ipcRenderer.on("credentialspass", (event, data) => {
+      console.log('CREDENTIALS!!', data);
+      SetCredentials(data);
+    });
+  }, []);
 
   return (
     <>
